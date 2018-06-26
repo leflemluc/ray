@@ -1,0 +1,21 @@
+MsPacman-Feudal:
+    env: MountainCarContinuous-v0
+    run: Feudal
+    #checkpoint_freq: 1
+    trial_resources:
+      cpu: 1
+      gpu: 0
+      extra_cpu: 3
+    stop:
+        training_iteration: 1000
+    config:
+        num_workers: 3
+        gamma: 0.995
+        kl_coeff: 1.0
+        num_sgd_iter: 10
+        sgd_stepsize: .0001
+        sgd_batchsize: 64
+        devices: ["/gpu:0", "/gpu:1", "/gpu:2", "/gpu:3"]
+        tf_session_args: {"device_count": {"GPU": 4}, "log_device_placement": false, "allow_soft_placement": true}
+        timesteps_per_batch: 1000
+        c: 5

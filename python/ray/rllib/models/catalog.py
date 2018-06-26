@@ -14,6 +14,7 @@ from ray.rllib.models.action_dist import (
     Categorical, Deterministic, DiagGaussian, MultiActionDistribution)
 from ray.rllib.models.preprocessors import get_preprocessor
 from ray.rllib.models.fcnet import FullyConnectedNetwork
+from ray.rllib.models.rbf import RBF
 from ray.rllib.models.visionnet import VisionNetwork
 from ray.rllib.models.multiagentfcnet import MultiAgentFullyConnectedNetwork
 
@@ -139,6 +140,10 @@ class ModelCatalog(object):
         if "custom_model" in options:
             model = options["custom_model"]
             print("Using custom model {}".format(model))
+
+            if model == "RBF":
+                return RBF(inputs, num_outputs, options)
+
             return registry.get(RLLIB_MODEL, model)(
                 inputs, num_outputs, options)
 
@@ -270,7 +275,7 @@ class _RLlibPreprocessorWrapper(gym.ObservationWrapper):
 
         from gym.spaces.box import Box
         self.observation_space = Box(
-            -1.0, 1.0, preprocessor.shape, dtype=np.float32)
+            low=-1.0, high=1.0, shape=preprocessor.shape, dtype=np.float32)
 
     def observation(self, observation):
         return self.preprocessor.transform(observation)

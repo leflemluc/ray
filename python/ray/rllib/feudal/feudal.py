@@ -15,8 +15,9 @@ from ray.tune.result import TrainingResult
 from ray.tune.trial import Resources
 from ray.rllib.agent import Agent
 from ray.rllib.utils import FilterManager
-from ray.rllib.ppo.ppo_evaluator import PPOEvaluator
-from ray.rllib.ppo.rollout import collect_samples
+from ray.rllib.feudal.feudal_evaluator import FeudalEvaluator
+from ray.rllib.feudal.rollout import collect_samples
+from ray.rllib.feudal.utils import log_histogram
 
 
 DEFAULT_CONFIG = {
@@ -24,13 +25,10 @@ DEFAULT_CONFIG = {
     "gamma": 0.995,
     # Number of steps after which the rollout gets cut
     "horizon": 2000,
-    # If true, use the Generalized Advantage Estimator (GAE)
-    # with a value function, see https://arxiv.org/pdf/1506.02438.pdf.
-    "use_gae": True,
     # GAE(lambda) parameter
     "lambda": 1.0,
     # Initial coefficient for KL divergence
-    "kl_coeff": 0.2,
+    "kl_coeff": 0,
     # Number of SGD iterations in each outer loop
     "num_sgd_iter": 30,
     # Stepsize of SGD
@@ -50,17 +48,23 @@ DEFAULT_CONFIG = {
     # Total SGD batch size across all devices for SGD
     "sgd_batchsize": 128,
     # Coefficient of the value function loss
-    "vf_loss_coeff": 1.0,
+    "manager_vf_loss_coeff": 1.0,
+    "worker_vf_loss_coeff": 1.0,
     # Coefficient of the entropy regularizer
     "entropy_coeff": 0.0,
     # PPO clip parameter
     "clip_param": 0.3,
     # Target value for KL divergence
     "kl_target": 0.01,
-    # Config params to pass to the model
-    "model": {"free_log_std": False},
+    # Config params to pass to the models
+    "model_manager_filter": {"conv_filters": [[16, [8, 8], 4],[32, [4, 4], 2]], "fcnet_hiddens": [256], "fcnet_activation": "relu"},
+    "model_manager_VF": {"free_log_std": False, "fcnet_hiddens": [256], "fcnet_activation": "relu"},
+    "model_worker_VF": {"free_log_std": False, "fcnet_hiddens": [256], "fcnet_activation": "relu"},
+    "model_manager_goal": {"free_log_std": False, "fcnet_hiddens": [32, 32], "fcnet_activation": "tanh"},
+    "model_worker_goal": {"free_log_std": False, "fcnet_hiddens": [32, 32], "fcnet_activation": "tanh"},
     # Which observation filter to apply to the observation
     "observation_filter": "MeanStdFilter",
+    "reward_clipping": 1.0,
     # If >1, adds frameskip
     "extra_frameskip": 1,
     # Number of timesteps collected in each outer loop
@@ -87,12 +91,17 @@ DEFAULT_CONFIG = {
     "write_logs": True,
     # Arguments to pass to the env creator
     "env_config": {},
-    "regularization_factor": 0,
-    "ADB": False
+    # HYPERPARAMETERS OF THE HRL ARCHITECTURE:
+    "g_dim": 16,
+    "k_dim": 16,
+    "tradeoff_coeff": 0.5,
+    "gamma_internal": 0.95,
+    "c": 10
+
 }
 
 
-class PPOAgent(Agent):
+class FeudalAgent(Agent):
     _agent_name = "Feudal"
     _allow_unknown_subkeys = ["model", "tf_session_args", "env_config"]
     _default_config = DEFAULT_CONFIG
@@ -107,16 +116,15 @@ class PPOAgent(Agent):
             extra_gpu=cf["num_gpus_per_worker"] * cf["num_workers"])
 
     def _init(self):
-        print("THIS IS A TEST")
         self.global_step = 0
         self.kl_coeff = self.config["kl_coeff"]
-        self.local_evaluator = PPOEvaluator(
+        self.local_evaluator = FeudalEvaluator(
             self.registry, self.env_creator, self.config, self.logdir, False)
-        RemotePPOEvaluator = ray.remote(
+        RemoteFeudalEvaluator = ray.remote(
             num_cpus=self.config["num_cpus_per_worker"],
-            num_gpus=self.config["num_gpus_per_worker"])(PPOEvaluator)
+            num_gpus=self.config["num_gpus_per_worker"])(FeudalEvaluator)
         self.remote_evaluators = [
-            RemotePPOEvaluator.remote(
+            RemoteFeudalEvaluator.remote(
                 self.registry, self.env_creator, self.config, self.logdir,
                 True)
             for _ in range(self.config["num_workers"])]
@@ -153,13 +161,15 @@ class PPOAgent(Agent):
             # to guard against the case where all values are equal
             return (value - value.mean()) / max(1e-4, value.std())
 
-        samples.data["advantages"] = standardized(samples["advantages"])
+        samples.data["advantages_manager"] = standardized(samples["advantages_manager"])
+        samples.data["advantages_worker"] = standardized(samples["advantages_worker"])
 
         rollouts_end = time.time()
         print("Computing policy (iterations=" + str(config["num_sgd_iter"]) +
               ", stepsize=" + str(config["sgd_stepsize"]) + "):")
         names = [
-            "iter", "total loss", "policy loss", "vf loss", "kl", "entropy"]
+            "iter", "total loss", "manager policy loss", "manager vf loss",
+            "worker policy loss", "worker vf loss", "kl", "entropy"]
         print(("{:>15}" * len(names)).format(*names))
         samples.shuffle()
         shuffle_end = time.time()
@@ -175,7 +185,8 @@ class PPOAgent(Agent):
             batch_index = 0
             num_batches = (
                 int(tuples_per_device) // int(model.per_device_batch_size))
-            loss, policy_graph, vf_loss, kl, entropy = [], [], [], [], []
+            loss, manager_policy_graph, manager_vf_loss, worker_policy_graph, worker_vf_loss, kl, \
+            entropy = [], [], [], [], [], [], []
             permutation = np.random.permutation(num_batches)
             # Prepare to drop into the debugger
             if self.iteration == config["tf_debug_iteration"]:
@@ -184,26 +195,31 @@ class PPOAgent(Agent):
                 full_trace = (
                     i == 0 and self.iteration == 0 and
                     batch_index == config["full_trace_nth_sgd_batch"])
-                batch_loss, batch_policy_graph, batch_vf_loss, batch_kl, \
-                    batch_entropy = model.run_sgd_minibatch(
+                batch_loss, batch_manager_policy_graph, batch_manager_vf_loss, \
+                batch_worker_policy_graph, batch_worker_vf_loss, \
+                batch_kl, batch_entropy = model.run_sgd_minibatch(
                         permutation[batch_index] * model.per_device_batch_size,
-                        self.kl_coeff, full_trace,
+                        self.kl_coeff, self.global_step, full_trace,
                         self.file_writer)
                 loss.append(batch_loss)
-                policy_graph.append(batch_policy_graph)
-                vf_loss.append(batch_vf_loss)
+                manager_policy_graph.append(batch_manager_policy_graph)
+                manager_vf_loss.append(batch_manager_vf_loss)
+                worker_policy_graph.append(batch_worker_policy_graph)
+                worker_vf_loss.append(batch_worker_vf_loss)
                 kl.append(batch_kl)
                 entropy.append(batch_entropy)
                 batch_index += 1
             loss = np.mean(loss)
-            policy_graph = np.mean(policy_graph)
-            vf_loss = np.mean(vf_loss)
+            manager_policy_graph = np.mean(manager_policy_graph)
+            manager_vf_loss = np.mean(manager_vf_loss)
+            worker_policy_graph = np.mean(worker_policy_graph)
+            worker_vf_loss = np.mean(worker_vf_loss)
             kl = np.mean(kl)
             entropy = np.mean(entropy)
             sgd_end = time.time()
             print(
-                "{:>15}{:15.5e}{:15.5e}{:15.5e}{:15.5e}{:15.5e}".format(
-                    i, loss, policy_graph, vf_loss, kl, entropy))
+                "{:>15}{:15.5e}{:15.5e}{:15.5e}{:15.5e}{:15.5e}{:15.5e}{:15.5e}".format(
+                    i, loss, manager_policy_graph, manager_vf_loss, worker_policy_graph, worker_vf_loss, kl, entropy))
 
             values = []
             if i == config["num_sgd_iter"] - 1:
@@ -219,11 +235,27 @@ class PPOAgent(Agent):
                         tag=metric_prefix + "mean_loss",
                         simple_value=loss),
                     tf.Summary.Value(
+                        tag=metric_prefix + "manager_policy_graph",
+                        simple_value=manager_policy_graph),
+                    tf.Summary.Value(
+                        tag=metric_prefix + "manager_vf_loss",
+                        simple_value=manager_vf_loss),
+                    tf.Summary.Value(
+                        tag=metric_prefix + "worker_policy_graph",
+                        simple_value=worker_policy_graph),
+                    tf.Summary.Value(
+                        tag=metric_prefix + "worker_vf_loss",
+                        simple_value=worker_vf_loss),
+                    tf.Summary.Value(
                         tag=metric_prefix + "mean_kl",
                         simple_value=kl)])
                 if self.file_writer:
                     sgd_stats = tf.Summary(value=values)
                     self.file_writer.add_summary(sgd_stats, self.global_step)
+                    weights = model.get_weights()
+                    for key, variable in weights.items():
+                        log_histogram(self.file_writer, key, variable, self.global_step)
+
             self.global_step += 1
             sgd_time += sgd_end - sgd_start
         if kl > 2.0 * config["kl_target"]:

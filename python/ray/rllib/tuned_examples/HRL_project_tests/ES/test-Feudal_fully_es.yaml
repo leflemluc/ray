@@ -1,0 +1,28 @@
+MsPacman-Feudal:
+    env: MsPacman-v0
+    run: Feudal_fully_es
+    checkpoint_freq: 1
+    trial_resources:
+      cpu: 1
+      gpu: 0
+      extra_cpu: 3
+    stop:
+        training_iteration: 3
+    config:
+        tradeoff_coeff: 0.5
+        c: 5
+        g_dim: 16
+        k: 16
+        z_dimension: 256
+        hidden_goal_designer: {"hiddens": [64, 64], "activation":"tanh"}
+        l2_coeff: 0.005
+        noise_stdev: 0.02
+        episodes_per_batch: 1000
+        timesteps_per_batch: 10000
+        eval_prob: 0.003
+        return_proc_mode: "centered_rank"
+        num_workers: 10
+        stepsize: 0.01
+        observation_filter: "MeanStdFilter"
+        noise_size: 250000000
+        env_config: {}

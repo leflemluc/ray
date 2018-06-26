@@ -13,7 +13,7 @@ from ray.rllib.optimizers.sample_batch import SampleBatch
 
 
 def _register_all():
-    for key in ["PPO", "ES", "DQN", "APEX", "A3C", "BC", "PG", "DDPG",
+    for key in ["Feudal", "Feudal_fully_es", "PPO", "ES", "DQN", "APEX", "A3C", "BC", "PG", "DDPG",
                 "APEX_DDPG", "__fake", "__sigmoid_fake_data",
                 "__parameter_tuning"]:
         from ray.rllib.agent import get_agent_class

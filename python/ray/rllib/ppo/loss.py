@@ -34,9 +34,12 @@ class ProximalPolicyGraph(object):
             # do not make the standard deviations free variables.
             vf_config["free_log_std"] = False
             with tf.variable_scope("value_function"):
-                self.value_function = ModelCatalog.get_model(
-                    registry, observations, 1, vf_config).outputs
+                vf_approximator = ModelCatalog.get_model(
+                    registry, observations, 1, vf_config)
+                self.value_function = vf_approximator.outputs
+                self.last_layer_vf = vf_approximator.last_layer
             self.value_function = tf.reshape(self.value_function, [-1])
+            self.last_layer_vf = tf.reshape(self.last_layer_vf, [-1])
 
         # Make loss functions.
         self.ratio = tf.exp(self.curr_dist.logp(actions) -
@@ -55,7 +58,8 @@ class ProximalPolicyGraph(object):
             # We use a huber loss here to be more robust against outliers,
             # which seem to occur when the rollouts get longer (the variance
             # scales superlinearly with the length of the rollout)
-            self.vf_loss1 = tf.square(self.value_function - value_targets)
+            self.vf_loss1 = tf.square(self.value_function - value_targets) + \
+                            config["regularization_factor"] * tf.norm(self.last_layer_vf)
             vf_clipped = prev_vf_preds + tf.clip_by_value(
                 self.value_function - prev_vf_preds,
                 -config["clip_param"], config["clip_param"])
