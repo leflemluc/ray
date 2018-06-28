@@ -14,6 +14,7 @@ from ray.rllib.agent import Agent
 from ray.rllib.utils import FilterManager
 from ray.rllib.ppo.ppo_evaluator import PPOEvaluator
 from ray.rllib.optimizers.multi_gpu_optimizer import LocalMultiGPUOptimizer
+from ray.rllib.utils import log_histogram
 
 DEFAULT_CONFIG = {
     # Discount factor of the MDP
@@ -83,6 +84,8 @@ DEFAULT_CONFIG = {
     "write_logs": True,
     # Arguments to pass to the env creator
     "env_config": {},
+    "ADB": False,
+    "regularization": 0.0
 }
 
 
@@ -100,15 +103,16 @@ class PPOAgent(Agent):
             extra_gpu=cf["num_gpus_per_worker"] * cf["num_workers"])
 
     def _init(self):
+        self.adb = self.config["ADB"]
         self.global_step = 0
         self.local_evaluator = PPOEvaluator(
-            self.env_creator, self.config, self.logdir, False)
+            self.env_creator, self.config, self.logdir, False, adb=self.adb)
         RemotePPOEvaluator = ray.remote(
             num_cpus=self.config["num_cpus_per_worker"],
             num_gpus=self.config["num_gpus_per_worker"])(PPOEvaluator)
         self.remote_evaluators = [
             RemotePPOEvaluator.remote(
-                self.env_creator, self.config, self.logdir, True)
+                self.env_creator, self.config, self.logdir, True, adb=self.adb)
             for _ in range(self.config["num_workers"])]
 
         self.optimizer = LocalMultiGPUOptimizer(
@@ -117,6 +121,12 @@ class PPOAgent(Agent):
              "num_sgd_iter": self.config["num_sgd_iter"],
              "timesteps_per_batch": self.config["timesteps_per_batch"]},
             self.local_evaluator, self.remote_evaluators,)
+
+        if self.config["write_logs"]:
+            self.file_writer = tf.summary.FileWriter(
+                self.logdir, self.local_evaluator.sess.graph)
+        else:
+            self.file_writer = None
 
         self.saver = tf.train.Saver(max_to_keep=None)
 
@@ -146,6 +156,10 @@ class PPOAgent(Agent):
             "entropy": entropy,
             "kl_coefficient": self.local_evaluator.kl_coeff_val,
         }
+
+        weights = self.local_evaluator.get_weights()
+        for key, variable in weights.items():
+            log_histogram.log_histogram(self.file_writer, key, variable, self.global_step)
 
         FilterManager.synchronize(
             self.local_evaluator.filters, self.remote_evaluators)

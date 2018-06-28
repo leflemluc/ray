@@ -95,6 +95,9 @@ class DiagGaussian(ActionDistribution):
                 0.5 * np.log(2.0 * np.pi) * tf.to_float(tf.shape(x)[1]) -
                 tf.reduce_sum(self.log_std, reduction_indices=[1]))
 
+    def r_matrix(self, x):
+        return tf.exp(-0.5 * (tf.square(x- self.mean)) / tf.square(self.std)) / tf.sqrt(2 * np.pi * tf.square(self.std))
+
     def kl(self, other):
         assert isinstance(other, DiagGaussian)
         return tf.reduce_sum(other.log_std - self.log_std +

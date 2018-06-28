@@ -17,6 +17,7 @@ from ray.rllib.models.preprocessors import get_preprocessor
 from ray.rllib.models.fcnet import FullyConnectedNetwork
 from ray.rllib.models.visionnet import VisionNetwork
 from ray.rllib.models.lstm import LSTM
+from ray.rllib.models.rbf import RBF
 from ray.rllib.models.multiagentfcnet import MultiAgentFullyConnectedNetwork
 
 
@@ -113,9 +114,9 @@ class ModelCatalog(object):
 
         if isinstance(action_space, gym.spaces.Box):
             return tf.placeholder(
-                tf.float32, shape=(None, action_space.shape[0]))
+                tf.float32, shape=(None, action_space.shape[0])), action_space.shape[0]
         elif isinstance(action_space, gym.spaces.Discrete):
-            return tf.placeholder(tf.int64, shape=(None,))
+            return tf.placeholder(tf.int64, shape=(None,)), -1
         elif isinstance(action_space, gym.spaces.Tuple):
             size = 0
             all_discrete = True
@@ -126,7 +127,7 @@ class ModelCatalog(object):
                     all_discrete = False
                     size += np.product(action_space.spaces[i].shape)
             return tf.placeholder(
-                tf.int64 if all_discrete else tf.float32, shape=(None, size))
+                tf.int64 if all_discrete else tf.float32, shape=(None, size)), size
         else:
             raise NotImplementedError("action space {}"
                                       " not supported".format(action_space))
@@ -147,6 +148,8 @@ class ModelCatalog(object):
         if "custom_model" in options:
             model = options["custom_model"]
             print("Using custom model {}".format(model))
+            if model == "RBF":
+                return RBF(inputs, num_outputs, options)
             return _global_registry.get(RLLIB_MODEL, model)(
                 inputs, num_outputs, options)
 

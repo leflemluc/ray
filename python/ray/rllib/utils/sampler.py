@@ -31,7 +31,7 @@ class SyncSampler(object):
 
     def __init__(
             self, env, policies, policy_mapping_fn, obs_filters,
-            num_local_steps, horizon=None, pack=False, tf_sess=None):
+            num_local_steps, horizon=None, pack=False, tf_sess=None, adb=False):
         self.async_vector_env = AsyncVectorEnv.wrap_async(env)
         self.num_local_steps = num_local_steps
         self.horizon = horizon
@@ -41,7 +41,7 @@ class SyncSampler(object):
         self.rollout_provider = _env_runner(
             self.async_vector_env, self.policies, self.policy_mapping_fn,
             self.num_local_steps, self.horizon, self._obs_filters, pack,
-            tf_sess)
+            tf_sess, adb)
         self.metrics_queue = queue.Queue()
 
     def get_data(self):
@@ -144,7 +144,7 @@ class AsyncSampler(threading.Thread):
 
 def _env_runner(
         async_vector_env, policies, policy_mapping_fn, num_local_steps,
-        horizon, obs_filters, pack, tf_sess=None):
+        horizon, obs_filters, pack, tf_sess=None, adb=False):
     """This implements the common experience collection logic.
 
     Args:
@@ -300,6 +300,7 @@ def _env_runner(
             else:
                 eval_results[policy_id] = policy.compute_actions(
                     [t.obs for t in eval_data], rnn_in, is_training=True)
+
         if builder:
             eval_results = {k: builder.get(v) for k, v in eval_results.items()}
 
@@ -312,6 +313,14 @@ def _env_runner(
             for f_i, column in enumerate(rnn_out_cols):
                 pi_info_cols["state_out_{}".format(f_i)] = column
             # Save output rows
+            if adb:
+
+                pi_info_cols["Q_functions"] = np.array(policy.compute_Q_fuctions(
+                    [t.obs for t in eval_data], actions))
+                #print('pi_info_cols["Q_functions"]')
+                #print(pi_info_cols["Q_functions"].shape)
+                #print(pi_info_cols["Q_functions"])
+
             for i, action in enumerate(actions):
                 env_id = eval_data[i].env_id
                 agent_id = eval_data[i].agent_id
@@ -329,7 +338,13 @@ def _env_runner(
 
         # Return computed actions to ready envs. We also send to envs that have
         # taken off-policy actions; those envs are free to ignore the action.
+        print("dict(actions_to_send)")
+        print(dict(actions_to_send))
         async_vector_env.send_actions(dict(actions_to_send))
+
+
+
+
 
 
 def _to_column_format(rnn_state_rows):

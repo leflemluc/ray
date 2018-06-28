@@ -24,7 +24,9 @@ class PPOEvaluator(TFMultiGPUSupport):
     network weights. When run as a remote agent, only this graph is used.
     """
 
-    def __init__(self, env_creator, config, logdir, is_remote):
+    def __init__(self, env_creator, config, logdir, is_remote, adb=False):
+
+        self.adb = adb
         self.config = config
         self.logdir = logdir
         self.env = ModelCatalog.get_preprocessor_as_wrapper(
@@ -47,13 +49,18 @@ class PPOEvaluator(TFMultiGPUSupport):
             tf.float32, shape=(None,) + self.env.observation_space.shape)
         # Targets of the value function.
         self.value_targets = tf.placeholder(tf.float32, shape=(None,))
-        # Advantage values in the policy gradient estimator.
-        self.advantages = tf.placeholder(tf.float32, shape=(None,))
 
         action_space = self.env.action_space
-        self.actions = ModelCatalog.get_action_placeholder(action_space)
+        self.actions, self.action_dim = ModelCatalog.get_action_placeholder(action_space)
         self.distribution_class, self.logit_dim = ModelCatalog.get_action_dist(
             action_space, config["model"])
+
+        # Advantage values in the policy gradient estimator.
+        if self.adb:
+            self.advantages = tf.placeholder(tf.float32, shape=(None, self.action_dim))
+        else:
+            self.advantages = tf.placeholder(tf.float32, shape=(None,))
+
         # Log probabilities from the policy before the policy update.
         self.prev_logits = tf.placeholder(
             tf.float32, shape=(None, self.logit_dim))
@@ -81,7 +88,7 @@ class PPOEvaluator(TFMultiGPUSupport):
         self.sampler = SyncSampler(
             self.env, {"default": self.common_policy}, lambda _: "default",
             {"default": self.obs_filter}, self.config["horizon"],
-            self.config["horizon"])
+            self.config["horizon"], adb=self.adb)
 
     def tf_loss_inputs(self):
         return self.inputs
@@ -89,10 +96,10 @@ class PPOEvaluator(TFMultiGPUSupport):
     def build_tf_loss(self, input_placeholders):
         obs, vtargets, advs, acts, plog, pvf_preds = input_placeholders
         return ProximalPolicyGraph(
-            self.env.observation_space, self.env.action_space,
+            self.env.observation_space, self.env.action_space, self.action_dim,
             obs, vtargets, advs, acts, plog, pvf_preds, self.logit_dim,
             self.kl_coeff, self.distribution_class, self.config,
-            self.sess)
+            self.sess, self.adb)
 
     def init_extra_ops(self, device_losses):
         self.extra_ops = OrderedDict()
@@ -162,7 +169,7 @@ class PPOEvaluator(TFMultiGPUSupport):
             last_r = 0.0  # note: not needed since we don't truncate rollouts
             samples = compute_advantages(
                 rollout, last_r, self.config["gamma"],
-                self.config["lambda"], use_gae=self.config["use_gae"])
+                self.config["lambda"], use_gae=self.config["use_gae"], adb=self.adb)
             num_steps_so_far += samples.count
             all_samples.append(samples)
         return SampleBatch.concat_samples(all_samples)
