@@ -9,6 +9,8 @@ import numpy as np
 import pickle
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
+from ray.rllib.utils import log_histogram
+
 
 import ray
 from ray.tune.result import TrainingResult
@@ -93,7 +95,7 @@ DEFAULT_CONFIG = {
 
 
 class PPOAgent(Agent):
-    _agent_name = "Feudal"
+    _agent_name = "PPO"
     _allow_unknown_subkeys = ["model", "tf_session_args", "env_config"]
     _default_config = DEFAULT_CONFIG
 
@@ -107,18 +109,18 @@ class PPOAgent(Agent):
             extra_gpu=cf["num_gpus_per_worker"] * cf["num_workers"])
 
     def _init(self):
-        print("THIS IS A TEST")
+        self.ADB = self.config["ADB"]
         self.global_step = 0
         self.kl_coeff = self.config["kl_coeff"]
         self.local_evaluator = PPOEvaluator(
-            self.registry, self.env_creator, self.config, self.logdir, False)
+            self.registry, self.env_creator, self.config, self.logdir, False, self.ADB)
         RemotePPOEvaluator = ray.remote(
             num_cpus=self.config["num_cpus_per_worker"],
             num_gpus=self.config["num_gpus_per_worker"])(PPOEvaluator)
         self.remote_evaluators = [
             RemotePPOEvaluator.remote(
                 self.registry, self.env_creator, self.config, self.logdir,
-                True)
+                True, self.ADB)
             for _ in range(self.config["num_workers"])]
         self.start_time = time.time()
         if self.config["write_logs"]:
@@ -224,6 +226,10 @@ class PPOAgent(Agent):
                 if self.file_writer:
                     sgd_stats = tf.Summary(value=values)
                     self.file_writer.add_summary(sgd_stats, self.global_step)
+                    weights = self.local_evaluator.get_weights()
+                    for key, variable in weights.items():
+                        log_histogram.log_histogram(self.file_writer, key, variable, self.global_step)
+
             self.global_step += 1
             sgd_time += sgd_end - sgd_start
         if kl > 2.0 * config["kl_target"]:

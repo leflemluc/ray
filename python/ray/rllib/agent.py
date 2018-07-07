@@ -243,12 +243,6 @@ def get_agent_class(alg):
     elif alg == "ES":
         from ray.rllib import es
         return es.ESAgent
-    elif alg == "Feudal":
-        from ray.rllib import feudal
-        return feudal.FeudalAgent
-    elif alg == "Feudal_fully_es":
-        from ray.rllib import feudal_fully_es
-        return feudal_fully_es.FEUDAL_FULLY_ESAgent
     elif alg == "DQN":
         from ray.rllib import dqn
         return dqn.DQNAgent

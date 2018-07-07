@@ -30,7 +30,8 @@ class PPOEvaluator(PolicyEvaluator):
     network weights. When run as a remote agent, only this graph is used.
     """
 
-    def __init__(self, registry, env_creator, config, logdir, is_remote):
+    def __init__(self, registry, env_creator, config, logdir, is_remote, ADB):
+        self.ADB = ADB
         self.registry = registry
         self.is_remote = is_remote
         if is_remote:
@@ -63,8 +64,6 @@ class PPOEvaluator(PolicyEvaluator):
             tf.float32, shape=(None,) + self.env.observation_space.shape)
         # Targets of the value function.
         self.value_targets = tf.placeholder(tf.float32, shape=(None,))
-        # Advantage values in the policy gradient estimator.
-        self.advantages = tf.placeholder(tf.float32, shape=(None,))
 
         action_space = self.env.action_space
         self.actions = ModelCatalog.get_action_placeholder(action_space)
@@ -75,6 +74,16 @@ class PPOEvaluator(PolicyEvaluator):
             tf.float32, shape=(None, self.logit_dim))
         # Value function predictions before the policy update.
         self.prev_vf_preds = tf.placeholder(tf.float32, shape=(None,))
+
+        # Advantage values in the policy gradient estimator.
+        if self.ADB:
+            try:
+                action_dim = self.actions.shape[1]
+                self.advantages = tf.placeholder(tf.float32, shape=(None, action_dim))
+            except:
+                print("Action dim not defined")
+        else:
+            self.advantages = tf.placeholder(tf.float32, shape=(None,))
 
         if is_remote:
             self.batch_size = config["rollout_batchsize"]
@@ -90,7 +99,7 @@ class PPOEvaluator(PolicyEvaluator):
                 self.env.observation_space, self.env.action_space,
                 obs, vtargets, advs, acts, plog, pvf_preds, self.logit_dim,
                 self.kl_coeff, self.distribution_class, self.config,
-                self.sess, self.registry)
+                self.sess, self.registry, ADB=self.ADB)
 
         self.par_opt = LocalSyncParallelOptimizer(
             tf.train.AdamOptimizer(self.config["sgd_stepsize"]),
@@ -131,7 +140,7 @@ class PPOEvaluator(PolicyEvaluator):
                         "rew_filter": self.rew_filter}
         self.sampler = SyncSampler(
             self.env, self.common_policy, self.obs_filter,
-            self.config["horizon"], self.config["horizon"])
+            self.config["horizon"], self.config["horizon"], ADB=self.ADB)
         self.sess.run(tf.global_variables_initializer())
 
     def load_data(self, trajectories, full_trace):
@@ -193,7 +202,7 @@ class PPOEvaluator(PolicyEvaluator):
             last_r = 0.0  # note: not needed since we don't truncate rollouts
             samples = compute_advantages(
                 rollout, last_r, self.config["gamma"],
-                self.config["lambda"], use_gae=self.config["use_gae"])
+                self.config["lambda"], use_gae=self.config["use_gae"], ADB=self.ADB)
             num_steps_so_far += samples.count
             all_samples.append(samples)
         return SampleBatch.concat_samples(all_samples)
