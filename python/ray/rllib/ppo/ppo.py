@@ -90,7 +90,8 @@ DEFAULT_CONFIG = {
     # Arguments to pass to the env creator
     "env_config": {},
     "regularization_factor": 0,
-    "ADB": False
+    "ADB": False,
+    "dist_type": None
 }
 
 

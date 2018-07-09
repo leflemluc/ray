@@ -68,7 +68,7 @@ class PPOEvaluator(PolicyEvaluator):
         action_space = self.env.action_space
         self.actions = ModelCatalog.get_action_placeholder(action_space)
         self.distribution_class, self.logit_dim = ModelCatalog.get_action_dist(
-            action_space)
+            action_space, dist_type=config["dist_type"])
         # Log probabilities from the policy before the policy update.
         self.prev_logits = tf.placeholder(
             tf.float32, shape=(None, self.logit_dim))

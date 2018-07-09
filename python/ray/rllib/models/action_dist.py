@@ -106,6 +106,42 @@ class DiagGaussian(ActionDistribution):
         return self.mean + self.std * tf.random_normal(tf.shape(self.mean))
 
 
+"""
+class NonDiagGaussian(ActionDistribution):
+
+    def __init__(self, inputs):
+        ActionDistribution.__init__(self, inputs)
+        mean, sigma_matrix = tf.split(inputs, [, ], axis=1)
+        self.mean = mean
+        self.sigma_matrix = sigma_matrix
+
+    def logp(self, x):
+        return (-0.5 * tf.reduce_sum(tf.square((x - self.mean) / self.std),
+                                     reduction_indices=[1]) -
+                0.5 * np.log(2.0 * np.pi) * tf.to_float(tf.shape(x)[1]) -
+                tf.reduce_sum(self.log_std, reduction_indices=[1]))
+
+    def r_matrix(self, x):
+        return tf.exp(-0.5 * (tf.square(x - self.mean)) / tf.square(self.std)) / tf.sqrt(
+            2 * np.pi * tf.square(self.std))
+
+    def kl(self, other):
+        assert isinstance(other, DiagGaussian)
+        return tf.reduce_sum(other.log_std - self.log_std +
+                             (tf.square(self.std) +
+                              tf.square(self.mean - other.mean)) /
+                             (2.0 * tf.square(other.std)) - 0.5,
+                             reduction_indices=[1])
+
+    def entropy(self):
+        return tf.reduce_sum(self.log_std + .5 * np.log(2.0 * np.pi * np.e),
+                             reduction_indices=[1])
+
+    def sample(self):
+        return self.mean + self.std * tf.random_normal(tf.shape(self.mean))
+"""
+
+
 class Deterministic(ActionDistribution):
     """Action distribution that returns the input values directly.
 
