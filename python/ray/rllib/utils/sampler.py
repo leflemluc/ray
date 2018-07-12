@@ -26,15 +26,16 @@ class SyncSampler(object):
 
     def __init__(
             self, env, policy, obs_filter, num_local_steps, horizon=None,
-            pack=False):
+            pack=False, ADB=False):
         self.num_local_steps = num_local_steps
         self.horizon = horizon
         self.env = env
         self.policy = policy
         self._obs_filter = obs_filter
         self.rollout_provider = _env_runner(self.env, self.policy,
-                                            self.num_local_steps, self.horizon,
-                                            self._obs_filter, pack)
+                                                    self.num_local_steps, self.horizon,
+                                                    self._obs_filter, pack, ADB)
+
         self.metrics_queue = queue.Queue()
 
     def get_data(self):
@@ -132,7 +133,7 @@ class AsyncSampler(threading.Thread):
         return completed
 
 
-def _env_runner(env, policy, num_local_steps, horizon, obs_filter, pack):
+def _env_runner(env, policy, num_local_steps, horizon, obs_filter, pack, ADB):
     """This implements the logic of the thread runner.
 
     It continually runs the policy, and as long as the rollout exceeds a
@@ -170,7 +171,8 @@ def _env_runner(env, policy, num_local_steps, horizon, obs_filter, pack):
 
     while True:
         batch_builder = SampleBatchBuilder()
-
+        observations_ = []
+        actions_ = []
         for _ in range(num_local_steps):
             # Assume batch size one for now
             action, features, pi_info = policy.compute_single_action(
@@ -199,11 +201,15 @@ def _env_runner(env, policy, num_local_steps, horizon, obs_filter, pack):
                 dones=terminal,
                 new_obs=observation,
                 **pi_info)
+            observations_.append(last_observation)
+            actions_.append(action)
 
             last_observation = observation
             last_features = features
 
             if terminal:
+                Q_functions = np.transpose(np.array(policy.compute_Q_fuctions(observations_, actions_)))
+                batch_builder.set_Q(Q_functions)
                 yield CompletedRollout(length, rewards)
 
                 if (length >= horizon or
